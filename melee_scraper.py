@@ -32,6 +32,54 @@ driver = webdriver.Chrome(service=service, options=options)
 # url = "https://melee.gg/Tournament/View/291842"
 driver.get(args.url)
 
+# Custom Parsing Functions
+def parse_misc(cell):
+    return [cell.text.strip()]
+
+def parse_player(cell):
+    # Example: Extract player name, handle any extra details if needed
+    try:
+        player_container = cell.find_element(By.XPATH, ".//div[contains(@class, 'match-table-player-container')]/a")
+        return [player_container.get_attribute("href").split("/")[-1].strip()]
+    except NoSuchElementException:
+        return [""]
+
+def parse_decklist(cell):
+    # Example: Clean decklist text, remove unnecessary characters
+    try:
+        player_container = cell.find_element(By.XPATH, ".//div[contains(@class, 'match-table-player-container')]/a")
+    except NoSuchElementException:
+        return ["", "", ""]
+    deck = player_container.text.strip().split(" - ")
+    leader = deck[0]
+    base = deck[1]
+    deck_link = player_container.get_attribute("href")
+    return [leader, base, deck_link]
+
+def parse_record(cell):
+    # Example: Parse match record "3-1" into a tuple (wins, losses)
+    raw_text = cell.text.strip()
+    if "-" in raw_text:
+        try:
+            wins, losses, draws = map(int, raw_text.split("-"))
+            return [wins, losses, draws]
+        except ValueError:
+            return [0, 0, 0]  # Default for invalid format
+    return [0, 0, 0]  # Default if no data
+
+# Dictionary mapping column classes to parsing functions
+column_parsers = {
+    "Rank-column": parse_misc,
+    "Player-column": parse_player,
+    "Decklists-column": parse_decklist,
+    "MatchRecord-column": parse_record,
+    "GameRecord-column": parse_record,
+    "Points-column": parse_misc,
+    "OpponentMatchWinPercentage-column": parse_misc,
+    "TeamGameWinPercentage-column": parse_misc,
+    "OpponentGameWinPercentage-column": parse_misc
+}
+
 # Function to forcefully close the cookie popup
 def close_cookie_popup():
     try:
@@ -67,34 +115,52 @@ WebDriverWait(driver, 30).until(
 # Initialize ActionChains for mouse scroll simulation
 actions = ActionChains(driver)
 
+def split_headers(headers):
+    new_headers = []
+    for header in headers:
+        if header == "Decklist":
+            new_headers.append("Leader")
+            new_headers.append("Base")
+            new_headers.append("Decklink")
+        elif header == "Match Record":
+            new_headers.append("Match Wins")
+            new_headers.append("Match Losses")
+            new_headers.append("Match Draws")
+        elif header == "Game Record":
+            new_headers.append("Game Wins")
+            new_headers.append("Game Losses")
+            new_headers.append("Game Draws")
+        else:
+            new_headers.append(header)
+    return new_headers
+
 # Function to extract table data with fresh table capture
 def extract_table_data():
     new_data = None
     new_headers = None
     try:
-        table_wrapper = driver.find_element(By.XPATH, '//*[@id="tournament-standings-table_wrapper"]')
-        dataTable = table_wrapper.find_element(By.XPATH, "//*[contains(@class, 'dataTables_scroll')]")
-        tableHead = dataTable.find_element(By.XPATH, "//*[contains(@class, 'dataTables_scrollHead')]")
-        headerRows = tableHead.find_elements(By.TAG_NAME, "tr")
-        new_headers = [th.text.strip() for th in headerRows[0].find_elements(By.TAG_NAME, "th")]
-
-        tableBody = dataTable.find_element(By.XPATH, "//*[contains(@class, 'dataTables_scrollBody')]")
-        bodyRows = tableBody.find_elements(By.TAG_NAME, "tr")
-        bodyRows = tableBody.find_elements(By.TAG_NAME, "tr")
+        headerRow = driver.find_element(By.XPATH, "//div[@id='tournament-standings-table_wrapper']/div[contains(@class, 'dataTables_scroll')]/div[contains(@class, 'dataTables_scrollHead')]//thead/tr")
+        new_headers = [th.text.strip() for th in headerRow.find_elements(By.TAG_NAME, "th")]
 
         new_data = []
 
-        for row in bodyRows[1:]:
-            # Re-locate row cells to avoid stale reference
-            cells = row.find_elements(By.TAG_NAME, "td")
-            cell_texts = [cell.text.strip() for cell in cells]
+        tbody = driver.find_element(By.XPATH, "//div[@id='tournament-standings-table_wrapper']/div[contains(@class, 'dataTables_scroll')]/div[contains(@class, 'dataTables_scrollBody')]//tbody")
+        rows = tbody.find_elements(By.TAG_NAME, "tr")
+        for row in rows:
+            cell_texts = []
+            for td_class, parser in column_parsers.items():
+                try:
+                    cell = row.find_element(By.XPATH, ".//td[contains(@class, '" + td_class + "')]")
+                    cell_texts += parser(cell)
+                except NoSuchElementException as e:
+                    continue
 
             # If any cell is empty, we need to scroll more
             if any(cell == "" for cell in cell_texts):
                 return None, None  # Incomplete rows detected
 
             new_data.append(cell_texts)
-        
+
         return new_headers, new_data
     except Exception as e:
         return None, None
@@ -125,6 +191,8 @@ def load_page(headers):
     new_headers = None
     new_data = None
 
+    time.sleep(2)  # Allow time for the next page to load
+
     while attempts < max_attempts:
         new_headers, new_data = extract_table_data()
         if new_headers and new_data:
@@ -146,7 +214,40 @@ def load_page(headers):
         
     return headers
         
+# Function to check if a round has results
+def check_round_has_results():
+    try:
+        print("Checking if the round has results...")
+        table_wrapper = driver.find_element(By.XPATH, './/*[@id="tournament-standings-table_wrapper"]')
+        empty_row = table_wrapper.find_element(By.XPATH, ".//*[contains(@class, 'dataTables_scroll')]//td[contains(@class, 'dataTables_empty')]")
+        print("No results found in this round.")
+        return False
+    except NoSuchElementException:
+        print("Results found in this round.")
+        return True
+
+# Function to switch to the previous round if no results
+def switch_to_previous_round():
+    print("Switching to the previous round...")
+    selector_container = driver.find_element(By.ID, "standings-round-selector-container")
+    active_button = selector_container.find_element(By.CLASS_NAME, "active")
+    all_buttons = selector_container.find_elements(By.CLASS_NAME, "round-selector")
+
+    for i, button in enumerate(all_buttons):
+        if button == active_button and i > 0:  # Find the button to the left
+            previous_button = all_buttons[i - 1]
+            print(f"Switching to round: {previous_button.text}")
+            previous_button.click()
+            time.sleep(2)  # Allow time for the page to load
+            return
+
 def main():
+    # Ensure we are on a round with results
+    while not check_round_has_results():
+        print("No results in current round. Switching to the previous round.")
+        time.sleep(1)
+        switch_to_previous_round()
+
     page_number = 1
     headers = []
     while True:
@@ -158,6 +259,8 @@ def main():
 
     # Close the browser
     driver.quit()
+
+    headers = split_headers(headers)
 
     # Convert to DataFrame for easy handling
     df = pd.DataFrame(data, columns=headers)
