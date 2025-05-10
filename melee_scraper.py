@@ -40,9 +40,9 @@ def parse_player(cell):
     # Example: Extract player name, handle any extra details if needed
     try:
         player_container = cell.find_element(By.XPATH, ".//div[contains(@class, 'match-table-player-container')]/a")
-        return [player_container.get_attribute("href").split("/")[-1].strip()]
+        return [player_container.get_attribute("href").split("/")[-1].strip(), cell.text.strip()]
     except NoSuchElementException:
-        return [""]
+        return ["", ""]
 
 def parse_decklist(cell):
     # Example: Clean decklist text, remove unnecessary characters
@@ -118,7 +118,10 @@ actions = ActionChains(driver)
 def split_headers(headers):
     new_headers = []
     for header in headers:
-        if header == "Decklist":
+        if header == "Players/Teams":
+            new_headers.append("Username")
+            new_headers.append("Players/Teams")
+        elif header == "Decklist":
             new_headers.append("Leader")
             new_headers.append("Base")
             new_headers.append("Decklink")
