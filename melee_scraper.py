@@ -20,7 +20,7 @@ options.add_argument("--disable-dev-shm-usage")
 
 parser = argparse.ArgumentParser(description="Melee.gg Tournament Scraper")
 parser.add_argument("url", help="Melee.gg tournament URL")
-parser.add_argument("output", help="Output CSV file")
+parser.add_argument("--output", default=None, help="Output CSV file")
 args = parser.parse_args()
 
 data = []
@@ -47,9 +47,9 @@ def parse_player(cell):
 def parse_decklist(cell):
     # Example: Clean decklist text, remove unnecessary characters
     try:
-        player_container = cell.find_element(By.XPATH, ".//div[contains(@class, 'match-table-player-container')]/a")
+        player_container = cell.find_element(By.XPATH, "./div/div[contains(@class, 'match-table-player-container')]/a")
     except NoSuchElementException:
-        return ["", "", ""]
+        return ["-", "-", "-"]
     deck = player_container.text.strip().split(" - ")
     leader = deck[0]
     base = deck[1]
@@ -151,31 +151,39 @@ def extract_table_data():
         rows = tbody.find_elements(By.TAG_NAME, "tr")
         for row in rows:
             cell_texts = []
+            found_columns = []
             for td_class, parser in column_parsers.items():
+                if td_class in found_columns:
+                    continue
                 try:
                     cell = row.find_element(By.XPATH, ".//td[contains(@class, '" + td_class + "')]")
                     cell_texts += parser(cell)
+                    found_columns.append(td_class)
                 except NoSuchElementException as e:
                     continue
 
             # If any cell is empty, we need to scroll more
             if any(cell == "" for cell in cell_texts):
+                print(cell_texts)
                 return None, None  # Incomplete rows detected
 
             new_data.append(cell_texts)
 
         return new_headers, new_data
     except Exception as e:
+        print("exception")
+        print(e)
         return None, None
 
 def press_next_button(page_number):
     # Check for next page button
     try:
         # driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-        for i in range(4):
-            driver.execute_script("window.scrollBy(0, 500)")  # Scroll down by 500 pixels
-            time.sleep(0.3)
+#        for i in range(4):
+#            driver.execute_script("window.scrollBy(0, 600)")  # Scroll down by 500 pixels
+#            time.sleep(0.3)
         next_button = driver.find_element(By.XPATH, "//*[contains(@class, 'paginate_button') and contains(@class, 'next')]")
+        actions.move_to_element(next_button).perform()
         if "disabled" in next_button.get_attribute("class"):
             return -1
         next_button.click()
@@ -189,12 +197,13 @@ def press_next_button(page_number):
         
 def load_page(headers):
     # Keep trying until all rows are fully loaded
+    actions.scroll_by_amount(0,500).perform()
     attempts = 0
-    max_attempts = 50  # To prevent infinite loop
+    max_attempts = 30  # To prevent infinite loop
     new_headers = None
     new_data = None
 
-    time.sleep(2)  # Allow time for the next page to load
+    time.sleep(1)  # Allow time for the next page to load
 
     while attempts < max_attempts:
         new_headers, new_data = extract_table_data()
@@ -202,12 +211,13 @@ def load_page(headers):
             break
 
         # Use ActionsChains to scroll like a real user
-        actions.move_to_element(driver.find_element(By.TAG_NAME, "body"))
-        actions.scroll_by_amount(0, 50).perform()
+        actions.scroll_by_amount(0, 100).perform()
         time.sleep(0.1)
         attempts += 1
 
-    data.extend(new_data)
+    if new_data is not None:
+        data.extend(new_data)
+
     if headers == []:
         headers = new_headers
     
@@ -257,6 +267,7 @@ def main():
         headers = load_page(headers)
         new_page_number = press_next_button(page_number)
         if new_page_number == -1:
+            print("no more pages")
             break
         page_number = new_page_number
 
@@ -268,9 +279,11 @@ def main():
     # Convert to DataFrame for easy handling
     df = pd.DataFrame(data, columns=headers)
 
+    output_file = args.output if args.output is not None else f"{args.url.split('/')[-1]}.csv"
+
     # Save the data to a CSV file (optional)
-    df.to_csv(args.output, index=False)
+    df.to_csv(output_file, index=False)
     
-    print("Saved melee file as \"" + args.output + "\"")
+    print("Saved melee file as \"" + output_file + "\"")
 
 main()
