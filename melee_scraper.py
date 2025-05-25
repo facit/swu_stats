@@ -12,27 +12,18 @@ import pandas as pd
 import time
 import argparse
 import re
+import os
 
 # Setup Selenium with Chrome (headless for efficiency)
 options = Options()
-options.headless = False  # Set to False for debugging (see the browser)
+options.headless = True  # Set to False for debugging (see the browser)
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
-
-parser = argparse.ArgumentParser(description="Melee.gg Tournament Scraper")
-parser.add_argument("url", help="Melee.gg tournament URL")
-parser.add_argument("--mode", help="Scrape standings, pairings or both")
-args = parser.parse_args()
 
 standings_data = []
 matches_data = []
 
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service, options=options)
-
-# Target tournament URL
-# url = "https://melee.gg/Tournament/View/291842"
-driver.get(args.url)
+global driver, actions
 
 # Custom Parsing Functions
 def parse_misc(cell, players):
@@ -89,10 +80,14 @@ def parse_decklist(cell, players):
     except NoSuchElementException:
         return ["-", "-", "-"]
     deck = player_container.text.strip().split(" - ")
-    leader = deck[0]
-    base = deck[1]
-    deck_link = player_container.get_attribute("href")
-    return [leader, base, deck_link]
+    if len(deck) == 2:
+        leader = deck[0]
+        base = deck[1]
+        deck_link = player_container.get_attribute("href")
+        return [leader, base, deck_link]
+    else:
+        return ["-", "-", "-"]
+
 
 def parse_decklists(cell, players):
     try:
@@ -145,7 +140,6 @@ def close_cookie_popup():
             EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "Necessary cookies only")]'))
         )
         cookie_button.click()
-        print("Cookie popup accepted (direct click).")
     except:
         print("No standard cookie button found. Trying forceful removal.")
 
@@ -156,21 +150,9 @@ def close_cookie_popup():
                 el.remove();
             });
         """)
-        print("Cookie popup forcefully removed.")
     except Exception as e:
         print("Failed to remove cookie popup.")
         raise e
-
-# Ensure the cookie popup is closed
-close_cookie_popup()
-
-# Wait for the main standings table to load using the precise XPath
-WebDriverWait(driver, 30).until(
-    EC.presence_of_element_located((By.XPATH, '//*[@id="tournament-standings-table"]'))
-)
-
-# Initialize ActionChains for mouse scroll simulation
-actions = ActionChains(driver)
 
 def split_standings_headers(headers):
     new_headers = []
@@ -236,7 +218,8 @@ def extract_standings_table_data():
                 if td_class in found_columns:
                     continue
                 try:
-                    cell = row.find_element(By.XPATH, ".//td[contains(@class, '" + td_class + "')]")
+                    tmp_cell = row.find_element(By.XPATH, ".//td[contains(@class, '" + td_class + "')]")
+                    cell = tmp_cell
                     cell_texts += parser(cell, None)
                     found_columns.append(td_class)
                 except NoSuchElementException as e:
@@ -298,6 +281,7 @@ def extract_matches_table_data(round):
         raise e
 
 def load_standings_from_page(headers):
+    global standings_data
     # Keep trying until all rows are fully loaded
     actions.move_to_element(driver.find_element(By.ID, "standings-round-selector-container")).perform()
     attempts = 0
@@ -330,6 +314,7 @@ def load_standings_from_page(headers):
     return headers
 
 def load_matches_from_page(headers, round):
+    global matches_data
     # Keep trying until all rows are fully loaded
     actions.move_to_element(driver.find_element(By.ID, "pairings-round-selector-container")).perform()
     attempts = 0
@@ -365,10 +350,18 @@ def load_matches_from_page(headers, round):
 def check_standings_for_round_has_results():
     try:
         table_wrapper = driver.find_element(By.XPATH, './/*[@id="tournament-standings-table_wrapper"]')
-        empty_row = table_wrapper.find_element(By.XPATH, ".//*[contains(@class, 'dataTables_scroll')]//td[contains(@class, 'dataTables_empty')]")
+        table_wrapper.find_element(By.XPATH, ".//*[contains(@class, 'dataTables_scroll')]//td[contains(@class, 'dataTables_empty')]")
         return False
     except NoSuchElementException:
         return True
+
+def elementHasClass(element, className):
+    classes = element.get_attribute("class")
+    for c in classes.split(" "):
+        if (c == className):
+            return True
+    
+    return False
 
 # Function to switch to the previous round if no results
 def switch_standings_to_previous_round():
@@ -379,9 +372,11 @@ def switch_standings_to_previous_round():
     for i, button in enumerate(all_buttons):
         if button == active_button and i > 0:  # Find the button to the left
             previous_button = all_buttons[i - 1]
-            previous_button.click()
-            time.sleep(2)  # Allow time for the page to load
-            return
+            driver.execute_script("arguments[0].click();", previous_button)
+            time.sleep(3)  # Allow time for the page to load
+            return True
+    
+    return False
 
 def switch_standings_to_next_page():
     # Check for next page button
@@ -459,12 +454,54 @@ def switch_matches_to_first_page():
     except ElementClickInterceptedException as e:
         return -1
         
-def main():
-    if(args.mode == "standings" or args.mode == "both"):
+def scrape_tournament(url, mode="standings"):
+    if mode is None:
+        mode = "standings"
+
+    global standings_data, matches_data
+    standings_data = []
+    matches_data = []
+
+    print(f"Melee link: {url}")
+
+    global driver, actions
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+
+    # Initialize ActionChains for mouse scroll simulation
+    actions = ActionChains(driver)
+
+    driver.get(url)
+
+    # Ensure the cookie popup is closed
+    close_cookie_popup()
+
+    # Wait for the main standings table to load using the precise XPath
+    WebDriverWait(driver, 30).until(
+        EC.presence_of_element_located((By.XPATH, '//*[@id="tournament-standings-table"]'))
+    )
+
+    output_file = f"{url.split('/')[-1]}_{mode}.csv"
+
+    if(mode == "standings" or mode == "both"):
         # Ensure we are on a round with results
         while not check_standings_for_round_has_results():
+            output_file = f"{url.split('/')[-1]}_{mode}_incomplete.csv"
             time.sleep(1)
-            switch_standings_to_previous_round()
+            if not switch_standings_to_previous_round():
+                return
+        # Switch to the last round if not already there
+        # Check that the last button of parent with id standings-round-selector-container has class "active"
+        selector_container = driver.find_element(By.ID, "standings-round-selector-container")
+        all_buttons = selector_container.find_elements(By.XPATH, ".//button[contains(@class, 'round-selector')]")
+        if all_buttons:
+            last_button = all_buttons[-1]
+            if not elementHasClass(last_button, "active"):
+                #create that file if it doesn't exist and make it empty
+                output_file = f"{url.split('/')[-1]}_{mode}_incomplete.csv"
+        else:
+            driver.quit()
+            exit(1)
 
         headers = []
         page_number = 1
@@ -473,18 +510,19 @@ def main():
             page_number = switch_standings_to_next_page()
 
         headers = split_standings_headers(headers)
-
         # Convert to DataFrame for easy handling
-        df = pd.DataFrame(standings_data, columns=headers)
-
-        output_file = f"{args.url.split('/')[-1]}_standings.csv"
+        try:
+            df = pd.DataFrame(standings_data, columns=headers)
+        except ValueError as e:
+            print("Error creating DataFrame. Check if the headers match the data.")
+            return
 
         # Save the standings_data to a CSV file (optional)
         df.to_csv(output_file, index=False)
         
         print("Saved standings as \"" + output_file + "\"")
 
-    if(args.mode == "pairings" or args.mode == "both"):
+    if(mode == "pairings" or mode == "both"):
         switch_matches_to_first_round()
         headers = []
         round_number = 1
@@ -506,8 +544,6 @@ def main():
         # Convert to DataFrame for easy handling
         df = pd.DataFrame(matches_data, columns=headers)
 
-        output_file = f"{args.url.split('/')[-1]}_pairings.csv"
-
         # Save the matches_data to a CSV file (optional)
         df.to_csv(output_file, index=False)
         
@@ -516,4 +552,10 @@ def main():
     # Close the browser
     driver.quit()
 
-main()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Melee.gg Tournament Scraper")
+    parser.add_argument("url", help="Melee.gg tournament URL")
+    parser.add_argument("--mode", help="Scrape standings, pairings or both")
+    args = parser.parse_args()
+
+    scrape_tournament(args.url, args.mode)
