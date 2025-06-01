@@ -22,7 +22,6 @@ var/
 csv/
 *_placements.txt
 *.db
-*.sql
 *.sqlite
 wheels/
 share/python-wheels/
