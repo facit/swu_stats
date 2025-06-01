@@ -1,6 +1,37 @@
+#!/usr/bin/env python3
+"""unify_placements.py
+Unify placements with standings.
+This script reads a placements file (e.g., `*_placements.txt`) and a corresponding
+standings file (e.g., `*_standings.csv`), and updates the ranks in the standings
+based on the placements. It also checks for any extra players in the top cut
+that are not listed in the placements and warns about them.
+Two warnings that are commonly encountered and that need to be manually fixed:
+1. If a player in the placements cannot be matched to any player/team in the standings,
+   it will print a warning. Often this is due to a typo or because a non-melee name was used.
+   It can also be because the player changed their username after the placements were recorded.
+2. If there are players in the top cut of the standings that are not listed in the
+   placements, it will print a warning for each of those players.
+   This is often due to a bug in melee that makes it so standings for dropped players
+   with 0 played games are calculated wrong.
+
+Usage
+-------
+    python unify_placements.py <placements.txt>
+    python unify_placements.py --all
+
+If `--all` is specified, it processes all `*_placements.txt` files in the current folder.
+It expects the placements file to be in a specific format where each line contains
+a placement followed by a colon and the player's name, e.g.:
+    1st: Player One
+    2nd: Player Two
+It expects the standings file to be a CSV with columns "Username", "Players/Teams", and "Rank".
+Other columns are ignored but will be preserved in the output.
+
+It will output a unified standings file with the same name as the original standings file,
+but with `_unified` appended before the `.csv` extension.
+"""
 import argparse
 import glob
-import csv
 import re
 import sys
 import os
@@ -19,12 +50,15 @@ def load_placements(filename):
             if ":" not in line:
                 continue
             placement, player = line.strip().split(":", 1)
+            if player.strip() == "":
+                continue
             placements.append((placement.strip(), player.strip()))
     return placements
 
 def find_standings_file(base_id):
     candidates = [
-        f"{base_id}_standings_incomplete.csv"
+        f"{base_id}_standings_incomplete.csv",
+        f"{base_id}_standings.csv"
     ]
     for fname in candidates:
         if os.path.exists(fname):
@@ -38,7 +72,7 @@ def unify_placements(placements_file, standings_file, output_file):
     # Build a set of all player names from placements for quick lookup (lowercase)
     placement_names = set(player_name.lower() for _, player_name in placements)
     # Build a set of all top cut ranks from placements
-    top_cut_ranks = set(parse_placement(placement_str) for placement_str, _ in placements if parse_placement(placement_str) is not None)
+    top_cut_ranks = set(parse_placement(placement_str) for placement_str, _ in placements if placement_str.strip() != "" and parse_placement(placement_str) is not None)
 
     # Update ranks in the DataFrame
     for placement_str, player_name in placements:

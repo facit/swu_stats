@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+"""melee_scraper.py
+Scrape Melee.gg tournament standings and pairings.
+This script fetches tournament data from Melee.gg, including standings and pairings,
+and saves the results in CSV files. It can scrape either standings, pairings, or both.
+Usage
+-------
+    python melee_scraper.py <tournament_url> [--mode standings|pairings|both]
+
+If no mode is specified, it defaults to scraping standings.
+The tournament URL should be the full link to the Melee.gg tournament page.
+
+It will output two CSV files:
+- `<tournament_id>_standings.csv` for standings data
+- `<tournament_id>_pairings.csv` for pairings data
+"""
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -12,7 +28,6 @@ import pandas as pd
 import time
 import argparse
 import re
-import os
 
 # Setup Selenium with Chrome (headless for efficiency)
 options = Options()
