@@ -54,10 +54,26 @@ def get_tournament_by_melee_id(conn,melee_id):
     return None
 
 def insert_tournament(conn, name, date, link):
+    print(f"Inserting tournament: {name} on {date} with link {link}")
     cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO tournaments (name, date, link) VALUES (?, ?, ?)", (name, date, link))
     conn.commit()
     cur.execute("SELECT tournament_id FROM tournaments WHERE name=? AND date=? AND link=?", (name, date, link))
+    return cur.fetchone()[0]
+
+def get_player_by_name(conn, player_name):
+    cur = conn.cursor()
+    cur.execute("SELECT player_id FROM players WHERE name=?", (player_name,))
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    return None
+
+def insert_player(conn, name):
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO players (name) VALUES (?)", (name,))
+    conn.commit()
+    cur.execute("SELECT player_id FROM players WHERE name=?", (name,))
     return cur.fetchone()[0]
 
 def insert_leader(conn, name, subtitle):
@@ -93,17 +109,17 @@ def insert_deck(conn, leader_id, base_id, decklink):
     cur.execute("SELECT deck_id FROM decks WHERE leader_id=? AND base_id=? AND decklink=?", (leader_id, base_id, decklink))
     return cur.fetchone()[0]
 
-def insert_result(conn, tournament_id, deck_id, result, player_name):
+def insert_result(conn, tournament_id, deck_id, result, player_id):
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO results (tournament_id, deck_id, result, player_name) VALUES (?, ?, ?, ?)",
-        (tournament_id, deck_id, result, player_name)
+        "INSERT INTO results (tournament_id, deck_id, result, player_id) VALUES (?, ?, ?, ?)",
+        (tournament_id, deck_id, result, player_id)
     )
     conn.commit()
 
-def result_exists(conn, tournament_id, player_name):
+def result_exists(conn, tournament_id, player_db_id):
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM results WHERE tournament_id=? AND player_name=?", (tournament_id, player_name))
+    cur.execute("SELECT 1 FROM results WHERE tournament_id=? AND player_id=?", (tournament_id, player_db_id))
     return cur.fetchone() is not None
 
 def process_csv(conn, csv_file):
@@ -119,6 +135,8 @@ def process_csv(conn, csv_file):
     tournament_db_id = get_tournament_by_melee_id(conn, melee_id)
     if tournament_db_id is None:
         tournament_db_id = insert_tournament(conn, "", "", "")
+    else:
+        print(f"Tournament {melee_id} already exists in the database with ID {tournament_db_id}")
 
     # Iterate through the DataFrame rows and insert data into the database
     for _, row in df.iterrows():
@@ -132,20 +150,28 @@ def process_csv(conn, csv_file):
         if pd.isna(player_name) or pd.isna(result):
             continue
 
+        player_db_id = get_player_by_name(conn, player_name)
+        if player_db_id is None:
+            player_db_id = insert_player(conn, player_name)
+
         # Check results table to make sure this result isn't already in the database
-        if result_exists(conn, tournament_db_id, player_name):
+        if result_exists(conn, tournament_db_id, player_db_id):
             continue
 
-        if leader is not None and base is not None:
+        if leader is not None and leader != "-" and base is not None:
             leader_name = leader.strip().split(", ")[0]
             leader_subtitle = leader.strip().split(", ")[1]
-            leader_id = insert_leader(conn, leader_name, leader_subtitle)
-            base_id = insert_base(conn, base)
-            deck_id = insert_deck(conn, leader_id, base_id, decklink)
+            leader_id = None
+            base_id = None
+            if leader_name != "-" and leader_subtitle != "-" and base != "-":
+                leader_id = insert_leader(conn, leader_name, leader_subtitle)
+                base_id = insert_base(conn, base)
+                deck_id = insert_deck(conn, leader_id, base_id, decklink)
         else:
             # If leader or base is missing, we can still insert the result but without deck info
             deck_id = None
-        insert_result(conn, tournament_db_id, deck_id, int(result), player_name)
+
+        insert_result(conn, tournament_db_id, deck_id, int(result), player_db_id)
 
 if __name__ == "__main__":
     conn = sqlite3.connect(DB_FILE)

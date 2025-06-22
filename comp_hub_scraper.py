@@ -37,6 +37,11 @@ def parse_args():
     return parser.parse_args()
 
 def fetch_tournament_links(url=BASE_URL, date=None, start_date=None, end_date=None):
+    # Convert start_date and end_date to datetime.date if they are not None
+    if start_date:
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    if end_date:
+        end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
     response = requests.get(url)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -146,7 +151,7 @@ if __name__ == "__main__":
                         # Write each placement to the file
                         f.write(f"{result['placement']}: {result['player']}\n")
 
-        if not (data['melee_link'] and (data["melee_link"].startswith("https://melee.gg/") or data["melee_link"].startswith("https://www.melee.gg/"))):
+        if (data['melee_link'] and (data["melee_link"].startswith("https://melee.gg/") or data["melee_link"].startswith("https://www.melee.gg/"))):
             output_file = f"{data['melee_link'].split('/')[-1]}_standings.csv"
             if not os.path.exists(output_file) and not os.path.exists(f"{data['melee_link'].split('/')[-1]}_standings_incomplete.csv"):
                 melee_scraper.scrape_tournament(data['melee_link'])
